@@ -20,7 +20,7 @@ import os.log
 
         if useAutologin() {
             os_log("Using autologin", log: checkADLog, type: .debug)
-            _ = allowLogin()
+            allowLogin()
             os_log("CheckAD mech complete", log: checkADLog, type: .debug)
             return
         }
@@ -62,7 +62,7 @@ import os.log
 
         guard let loginWindow = controller.window else {
             os_log("Could not create login window UI", log: checkADLog, type: .error)
-            _ = denyLogin()
+            denyLogin()
             return
         }
 

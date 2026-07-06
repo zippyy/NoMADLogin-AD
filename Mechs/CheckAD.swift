@@ -3,59 +3,93 @@
 //  NoMADLogin
 //
 //  Created by Joel Rennich on 9/20/17.
-//  Copyright © 2017 Joel Rennich. All rights reserved.
 //
 
 import Cocoa
+import IOKit
 import os.log
 
-class CheckAD: NoLoMechanism {
-    @objc var signIn: SignIn!
-    
+/// The AuthorizationPlugin callbacks are not guaranteed to arrive on the main
+/// thread. AppKit windows shown by SecurityAgent must be created, presented,
+/// and torn down on the main thread.
+@objc final class CheckAD: NoLoMechanism {
+    @objc var signIn: SignIn?
+
     @objc func run() {
         os_log("CheckAD mech starting", log: checkADLog, type: .debug)
 
         if useAutologin() {
             os_log("Using autologin", log: checkADLog, type: .debug)
-            os_log("CheckAD mech complete", log: checkADLog, type: .debug)
             _ = allowLogin()
+            os_log("CheckAD mech complete", log: checkADLog, type: .debug)
             return
         }
-        os_log("Activating app", log: checkADLog, type: .debug)
-        NSApp.activate(ignoringOtherApps: true)
-        os_log("Loading XIB", log: checkADLog, type: .debug)
-        signIn = SignIn(windowNibName: NSNib.Name("SignIn"))
-        os_log("Set mech for loginwindow", log: checkADLog, type: .debug)
-        signIn.mech = mech
-        if let domain = self.managedDomain {
-            os_log("Set managed domain for loginwindow", log: checkADLog, type: .debug)
-            signIn.domainName = domain.uppercased()
+
+        let present = { [weak self] in
+            self?.presentLoginWindow()
         }
-        if let isSSLRequired = self.isSSLRequired {
-            os_log("Set SSL required", log: checkADLog, type: .debug)
-            signIn.isSSLRequired = isSSLRequired
+
+        if Thread.isMainThread {
+            present()
+        } else {
+            // The mechanism thread waits while its modal login UI is active,
+            // so synchronously entering the main queue preserves the original
+            // authorization flow without touching AppKit off-main-thread.
+            DispatchQueue.main.sync(execute: present)
         }
-        guard signIn.window != nil else {
-            os_log("Could not create login window UI", log: checkADLog, type: .default)
-            return
-        }
-        os_log("Displaying window", log: checkADLog, type: .debug)
-        NSApp.runModal(for: signIn.window!)
+
         os_log("CheckAD mech complete", log: checkADLog, type: .debug)
+    }
+
+    private func presentLoginWindow() {
+        precondition(Thread.isMainThread)
+
+        os_log("Activating app", log: checkADLog, type: .debug)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
+        os_log("Loading XIB", log: checkADLog, type: .debug)
+        let controller = SignIn(windowNibName: NSNib.Name("SignIn"))
+        controller.mech = mech
+
+        if let domain = managedDomain {
+            os_log("Set managed domain for loginwindow", log: checkADLog, type: .debug)
+            controller.domainName = domain.uppercased()
+        }
+        if let required = isSSLRequired {
+            os_log("Set SSL required", log: checkADLog, type: .debug)
+            controller.isSSLRequired = required
+        }
+
+        guard let loginWindow = controller.window else {
+            os_log("Could not create login window UI", log: checkADLog, type: .error)
+            _ = denyLogin()
+            return
+        }
+
+        signIn = controller
+        os_log("Displaying window", log: checkADLog, type: .debug)
+        NSApplication.shared.runModal(for: loginWindow)
     }
 
     @objc func tearDown() {
         os_log("Got teardown request", log: checkADLog, type: .debug)
-        signIn.loginTransition()
+
+        let closeUI = { [weak self] in
+            self?.signIn?.loginTransition()
+        }
+        if Thread.isMainThread {
+            closeUI()
+        } else {
+            DispatchQueue.main.async(execute: closeUI)
+        }
     }
 
     func useAutologin() -> Bool {
-        
         if UserDefaults(suiteName: "com.apple.loginwindow")?.bool(forKey: "DisableFDEAutoLogin") ?? false {
             os_log("FDE AutoLogin Disabled per loginwindow preference key", log: checkADLog, type: .debug)
             return false
         }
-        
+
         os_log("Checking for autologin.", log: checkADLog, type: .default)
         if FileManager.default.fileExists(atPath: "/tmp/nolorun") {
             os_log("NoLo has run once already. Load regular window as this isn't a reboot", log: checkADLog, type: .debug)
@@ -63,27 +97,27 @@ class CheckAD: NoLoMechanism {
         }
 
         os_log("NoLo hasn't run, trying autologin", log: checkADLog, type: .debug)
-        try? "Run Once".write(to: URL.init(fileURLWithPath: "/tmp/nolorun"), atomically: true, encoding: String.Encoding.utf8)
+        try? "Run Once".write(to: URL(fileURLWithPath: "/tmp/nolorun"), atomically: true, encoding: .utf8)
 
-        if let uuid = getEFIUUID() {
-            if let name = NoLoMechanism.getShortname(uuid: uuid) {
-                setContextString(type: kAuthorizationEnvironmentUsername, value: name)
-            }
+        if let uuid = getEFIUUID(), let name = NoLoMechanism.getShortname(uuid: uuid) {
+            setContextString(type: kAuthorizationEnvironmentUsername, value: name)
         }
         return true
     }
-    
-    fileprivate func getEFIUUID() -> String? {
-        let chosen = IORegistryEntryFromPath(kIOMasterPortDefault, "IODeviceTree:/chosen")
-        var properties : Unmanaged<CFMutableDictionary>?
-        let err = IORegistryEntryCreateCFProperties(chosen, &properties, kCFAllocatorDefault, IOOptionBits.init(bitPattern: 0))
 
-        if err != 0 {
+    private func getEFIUUID() -> String? {
+        let chosen = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/chosen")
+        guard chosen != 0 else { return nil }
+        defer { IOObjectRelease(chosen) }
+
+        var properties: Unmanaged<CFMutableDictionary>?
+        let result = IORegistryEntryCreateCFProperties(chosen, &properties, kCFAllocatorDefault, 0)
+        guard result == KERN_SUCCESS,
+              let dictionary = properties?.takeRetainedValue() as? [String: Any],
+              let uuid = dictionary["efilogin-unlock-ident"] as? Data else {
             return nil
         }
 
-        guard let props = properties!.takeRetainedValue() as? [ String : AnyHashable ] else { return nil }
-        guard let uuid = props["efilogin-unlock-ident"] as? Data else { return nil }
-        return String.init(data: uuid, encoding: String.Encoding.utf8)
+        return String(data: uuid, encoding: .utf8)
     }
 }

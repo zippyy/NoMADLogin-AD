@@ -1,0 +1,34 @@
+// Build overrides for current Xcode/macOS SDKs.
+// Use with: xcodebuild ... -xcconfig Config/ModernMacOS.xcconfig
+// Keep the deployment target below the current SDK so the bundle remains usable
+// on supported pre-macOS-27 systems while being compiled by the current toolchain.
+
+SDKROOT = macosx
+MACOSX_DEPLOYMENT_TARGET = 15.0
+
+// Build a single universal plug-in and matching dependency framework.
+ARCHS = arm64 x86_64
+ONLY_ACTIVE_ARCH = NO
+EXCLUDED_ARCHS =
+
+// Compile old Swift 4-era source in the current Swift 5 language mode.
+// Do not enable Swift 6 language mode until the AuthorizationPlugin code has
+// been fully audited for strict-concurrency correctness.
+SWIFT_VERSION = 5.0
+SWIFT_STRICT_CONCURRENCY = minimal
+
+CLANG_ENABLE_MODULES = YES
+CLANG_ENABLE_OBJC_ARC = YES
+CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES
+
+// The release script supplies Developer ID signing identity and team values.
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
+
+// SecurityAgent loads this bundle at the login window. Keep framework lookup
+// relative to the installed plug-in bundle.
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks @loader_path/../Frameworks @loader_path/../Resources
+ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES
+VALIDATE_PRODUCT = YES

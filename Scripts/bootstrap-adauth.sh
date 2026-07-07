@@ -23,6 +23,21 @@ git clone --depth 1 --branch "${REPO_REF}" "${REPO_URL}" "${SOURCE_DIR}"
 PROJECT="${SOURCE_DIR}/NoMAD-ADAuth.xcodeproj"
 [[ -d "${PROJECT}" ]] || { echo "Expected Xcode project was not found: ${PROJECT}" >&2; exit 1; }
 
+# ADAuth 1.1.4 still imports NoMADPRIVATE from NoMADSession.swift even though
+# the source target includes its Logger and UNIXUtilities implementations.
+# Older Xcode builds silently left that private module reference in the emitted
+# .swiftmodule. Current Swift dependency scanning correctly rejects consumers
+# of the framework because NoMADPRIVATE is not shipped. Remove only that stale
+# import before compiling the framework, leaving the actual helper sources in
+# the same target.
+PRIVATE_IMPORTS="$(grep -RIl --include='*.swift' '^import NoMADPRIVATE$' "${SOURCE_DIR}" || true)"
+if [[ -n "${PRIVATE_IMPORTS}" ]]; then
+  echo "Removing stale NoMADPRIVATE imports from ADAuth source"
+  while IFS= read -r source_file; do
+    sed -i '' '/^import NoMADPRIVATE$/d' "${source_file}"
+  done <<< "${PRIVATE_IMPORTS}"
+fi
+
 # The archived dependency has changed scheme names over time. Resolve the
 # framework-producing scheme from Xcode instead of hard-coding one.
 SCHEME="$(xcodebuild -list -json -project "${PROJECT}" | plutil -extract project.schemes.0 raw -)"

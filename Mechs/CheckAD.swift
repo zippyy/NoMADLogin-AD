@@ -25,7 +25,7 @@ import os.log
             return
         }
 
-        let present = { [weak self] in
+        let present: () -> Void = { [weak self] in
             self?.presentLoginWindow()
         }
 
@@ -35,7 +35,9 @@ import os.log
             // The mechanism thread waits while its modal login UI is active,
             // so synchronously entering the main queue preserves the original
             // authorization flow without touching AppKit off-main-thread.
-            DispatchQueue.main.sync(execute: present)
+            DispatchQueue.main.sync {
+                present()
+            }
         }
 
         os_log("CheckAD mech complete", log: checkADLog, type: .debug)
@@ -74,13 +76,15 @@ import os.log
     @objc func tearDown() {
         os_log("Got teardown request", log: checkADLog, type: .debug)
 
-        let closeUI = { [weak self] in
+        let closeUI: () -> Void = { [weak self] in
             self?.signIn?.loginTransition()
         }
         if Thread.isMainThread {
             closeUI()
         } else {
-            DispatchQueue.main.async(execute: closeUI)
+            DispatchQueue.main.async {
+                closeUI()
+            }
         }
     }
 

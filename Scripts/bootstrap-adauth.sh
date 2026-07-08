@@ -22,31 +22,24 @@ git clone --depth 1 --branch "${REPO_REF}" "${REPO_URL}" "${SOURCE_DIR}"
 
 PROJECT="${SOURCE_DIR}/NoMAD-ADAuth.xcodeproj"
 ADAUTH_SOURCE_DIR="${SOURCE_DIR}/NoMAD-ADAuth"
+PRIVATE_MODULEMAP="${ADAUTH_SOURCE_DIR}/module.modulemap"
 [[ -d "${PROJECT}" ]] || { echo "Expected Xcode project was not found: ${PROJECT}" >&2; exit 1; }
 [[ -d "${ADAUTH_SOURCE_DIR}" ]] || { echo "Expected ADAuth source directory was not found: ${ADAUTH_SOURCE_DIR}" >&2; exit 1; }
+[[ -f "${PRIVATE_MODULEMAP}" ]] || { echo "Expected NoMADPRIVATE module map was not found: ${PRIVATE_MODULEMAP}" >&2; exit 1; }
 
-# NoMAD-ADAuth 1.1.4 imports the old private NoMADPRIVATE Swift module. That
-# module is not distributed with this project. The imported names actually come
-# from ADAuth's own Objective-C DNS, GSS, and Kerberos headers, so expose those
-# headers to the Swift target directly through a bridging header.
+# NoMAD-ADAuth 1.1.4 imports a Clang module named NoMADPRIVATE for its local
+# Objective-C DNS, GSS, and Kerberos headers. A normal Swift import leaks that
+# private module into NoMAD_ADAuth.swiftmodule, which makes downstream builds of
+# NoMADLoginAD fail when Xcode cannot resolve NoMADPRIVATE. Keep the module for
+# the ADAuth build, but mark it implementation-only so consumers only import the
+# public NoMAD_ADAuth module.
 PRIVATE_IMPORTS="$(grep -RIl --include='*.swift' '^import NoMADPRIVATE$' "${ADAUTH_SOURCE_DIR}" || true)"
 if [[ -n "${PRIVATE_IMPORTS}" ]]; then
-  echo "Replacing NoMADPRIVATE imports with ADAuth's local Objective-C bridge"
+  echo "Marking NoMADPRIVATE imports as implementation-only"
   while IFS= read -r source_file; do
-    sed -i '' '/^import NoMADPRIVATE$/d' "${source_file}"
+    sed -i '' 's/^import NoMADPRIVATE$/@_implementationOnly import NoMADPRIVATE/' "${source_file}"
   done <<< "${PRIVATE_IMPORTS}"
 fi
-
-BRIDGING_HEADER="${ADAUTH_SOURCE_DIR}/NoMAD-ADAuth-Bridging-Header.h"
-cat > "${BRIDGING_HEADER}" <<'EOF'
-#import <Foundation/Foundation.h>
-#import <GSS/GSS.h>
-#import <Kerberos/Kerberos.h>
-#import "DNSResolver.h"
-#import "GSSItem.h"
-#import "KerbUtil.h"
-#import "krb5.h"
-EOF
 
 # The archived dependency has changed scheme names over time. Resolve the
 # framework-producing scheme from Xcode instead of hard-coding one.
@@ -63,7 +56,8 @@ xcodebuild \
   ARCHS="arm64 x86_64" \
   ONLY_ACTIVE_ARCH=NO \
   MACOSX_DEPLOYMENT_TARGET="${DEPLOYMENT_TARGET}" \
-  SWIFT_OBJC_BRIDGING_HEADER="${BRIDGING_HEADER}" \
+  SWIFT_INCLUDE_PATHS="${ADAUTH_SOURCE_DIR}" \
+  OTHER_SWIFT_FLAGS="-Xcc -fmodule-map-file=${PRIVATE_MODULEMAP}" \
   BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
   SKIP_INSTALL=NO \
   CODE_SIGNING_ALLOWED=NO \

@@ -19,6 +19,14 @@ TEAM_ID="${DEVELOPMENT_TEAM:-}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-15.0}" \
   bash "${ROOT_DIR}/Scripts/bootstrap-adauth.sh"
 
+# Swift 5 removed String.characters. The old DEPNotify tracker code only uses
+# it to create NSRegularExpression ranges, where UTF-16 length is the correct
+# NSString-compatible value.
+if grep -R "\.characters\.count" "${ROOT_DIR}/Notify/Tracker.swift" >/dev/null; then
+  echo "Patching Swift 5 String.characters.count compatibility"
+  sed -i '' 's/\.characters\.count/.utf16.count/g' "${ROOT_DIR}/Notify/Tracker.swift"
+fi
+
 rm -rf "${DERIVED_DATA}"
 BUILD_ARGS=(
   -project "${PROJECT}"
